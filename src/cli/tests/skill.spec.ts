@@ -38,7 +38,11 @@ test('installSkill copies the skill into .claude/skills', async () => {
     'reference.md',
   ]);
 
-  const skill = await readFile(join(target, 'SKILL.md'), 'utf8');
+  // Normalised: the checkout materialises CRLF on every platform.
+  const skill = (await readFile(join(target, 'SKILL.md'), 'utf8')).replace(
+    /\r\n/g,
+    '\n'
+  );
   assert.match(skill, /^---\nname: node-compressor\n/);
   assert.match(skill, /description: .+/);
 });

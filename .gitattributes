@@ -1,0 +1,9 @@
+# Line endings are a property of this repository, not of the machine checking it
+# out. The RLB prettier config pins `endOfLine: crlf`, so every working tree —
+# a Windows dev box and the Linux CI container alike — must materialise CRLF,
+# otherwise `prettier --check` fails in CI on every file.
+* text=auto eol=crlf
+
+# Files the OS may run through a shebang have to keep LF.
+*.sh text eol=lf
+*.mjs text eol=lf
