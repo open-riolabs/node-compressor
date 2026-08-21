@@ -1,0 +1,50 @@
+{
+  "name": "@open-rlb/node-compressor",
+  "version": "0.1.0",
+  "description": "Compression of buffers, streams and files plus tar/zip archiving, built on Node built-in modules only. Zero runtime dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "bin": {
+    "compressor": "./cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"src/**/tests/*.spec.ts\"",
+    "lint": "eslint \"src/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "cli": "node src/cli/index.ts"
+  },
+  "keywords": [
+    "compression",
+    "archive",
+    "tar",
+    "zip",
+    "gzip",
+    "brotli",
+    "zstd",
+    "deflate",
+    "stream",
+    "cli",
+    "typescript"
+  ],
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}
