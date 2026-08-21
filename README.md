@@ -40,6 +40,85 @@ await createArchive('release.tar.zst', ['dist', 'README.md']);
 await extractArchive('release.tar.zst', 'target/');
 ```
 
+## Architecture
+
+Nothing here reimplements compression. Every byte of gzip, deflate, brotli and
+zstd goes through `node:zlib`, and the zip CRC-32 is `zlib.crc32`. What the
+library adds is everything *around* that: container framing, format detection,
+path safety, atomic writes, and one consistent API over the four shapes your
+data can take.
+
+```
+                        ┌──────────────────────────────────┐
+                        │             index.ts             │  public barrel
+                        └───┬────────┬────────┬────────┬───┘
+            ┌───────────────┘        │        │        └────────────────┐
+            ▼                        ▼        ▼                         ▼
+      ┌───────────┐          ┌────────────┐  ┌──────────┐   ┌─────────────────────┐
+      │ buffer.ts │          │  stream.ts │  │ file.ts  │   │ archive/dispatch.ts │
+      │           │          │            │  │          │   │                     │
+      │ one shot, │          │ Transforms │  │ file to  │   │ picks the format,   │
+      │ in memory │          │ + header   │  │ file,    │   │ tar or zip, from    │
+      │           │          │   sniffing │  │ streamed │   │ name or content     │
+      └─────┬─────┘          └──────┬─────┘  └────┬─────┘   └──────────┬──────────┘
+            │                       │             │                    │
+            │                       │             │         ┌──────────┴──────────┐
+            │                       │             │         ▼                     ▼
+            │                       │             │    ┌─────────┐          ┌──────────┐
+            │                       │             │    │  tar/   │          │   zip/   │
+            │                       │             │    │ header  │          │  write   │
+            │                       │             │    │ pack    │          │  read    │
+            │                       │             │    │ extract │          │          │
+            │                       │             │    └────┬────┘          └────┬─────┘
+            │                       │             │         │                    │
+            ▼                       ▼             ▼         ▼                    ▼
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │ shared services                                                             │
+  │                                                                             │
+  │   algorithms.ts    presets to native levels, the only zlib entry point      │
+  │   detect.ts        magic bytes to algorithm                                 │
+  │   fsutil.ts        destination checks, write-to-temp-then-rename            │
+  │   archive/sources  disk and memory to a stream of entries                   │
+  │   archive/target   entries to disk: filters, strip, modes, timestamps       │
+  │   archive/paths    normalisation and the zip-slip refusals                  │
+  │   archive/reader   exact-length reads, random access for zip                │
+  │   archive/open     decompresses only what is actually compressed            │
+  └─────────────────────────────────────────────────────────────────────────────┘
+                                      ▼
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │ Node built-ins - the only dependency                                        │
+  │                                                                             │
+  │   node:zlib     every compress and decompress, plus crc32 for zip           │
+  │   node:stream   pipeline, backpressure, Duplex.from for the sniffing        │
+  │   node:fs       read and write streams, atomic rename, symlinks, modes      │
+  │   node:util     parseArgs, for the CLI                                      │
+  └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Who does what
+
+| Module | Responsibility |
+| --- | --- |
+| `index.ts` | The single public surface; every folder re-exports through its own barrel. |
+| `buffer.ts` | One-shot compression of data already in memory. |
+| `stream.ts` | The `Transform`s, the duplex that sniffs the header before choosing a decompressor, the progress counter. |
+| `file.ts` | File to file, streamed, never loading the payload; picks algorithm and destination from the extensions. |
+| `archive/dispatch.ts` | Chooses tar or zip — from the destination name when writing, from the content when reading. |
+| `archive/sources.ts` | Turns paths, in-memory entries, directories and symlinks into one stream of entries, walking directories. |
+| `archive/target.ts` | The other direction: writes entries to disk applying filters, `strip`, permissions and timestamps. |
+| `archive/paths.ts` | Path normalisation and the refusals that stop zip slip. |
+| `archive/reader.ts` | Exact-length sequential reads over a stream, and random access over a file or buffer for zip. |
+| `archive/open.ts` | Opens an archive, decompressing only when it really is compressed. |
+| `tar/header.ts` | The 512-byte ustar blocks: fields, checksum, PAX records, base-256 sizes. |
+| `tar/pack.ts` · `tar/extract.ts` | Tar out as a stream, tar in as an entry iterator. |
+| `zip/write.ts` | Local headers, data descriptors, central directory, ZIP64 promotion. |
+| `zip/read.ts` | Finds the EOCD, parses the central directory, reads single entries on demand. |
+| `algorithms.ts` | The only module that touches `node:zlib` directly: presets to native levels, compressor factories. |
+| `detect.ts` | Magic bytes to algorithm. |
+| `fsutil.ts` | Destination checks and the write-to-temp-then-rename dance. |
+| `data/` | Types, enums and `CompressionError`. No behaviour. |
+| `cli/` | Argument parsing, output formatting, glob filters, skill installer. |
+
 ## API
 
 Every layer shares the same options: what holds for buffers holds unchanged for streams
@@ -64,6 +143,39 @@ and files.
 | `compressStream(source, options?)` | Wires a source up and returns the compressed `Readable`. |
 | `decompressStream(source, options?)` | The same, decompressing. |
 | `createProgressStream(cb, total?)` | `PassThrough` that counts bytes without altering them. |
+
+```ts
+import {
+  compressStream,
+  createCompressStream,
+  createProgressStream,
+  decompressStream,
+} from '@open-rlb/node-compressor';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+
+// A compressor is just a Transform: drop it into any pipeline. Nothing is
+// buffered, so the file never sits in memory.
+await pipeline(
+  createReadStream('events.ndjson'),
+  createProgressStream(({ bytesRead }) => report(bytesRead)),
+  createCompressStream({ algorithm: 'zstd', preset: 'fast' }),
+  createWriteStream('events.ndjson.zst')
+);
+
+// Reading back, the algorithm comes from the first bytes: whoever consumes the
+// stream does not need to know what produced it.
+for await (const chunk of decompressStream(createReadStream('events.ndjson.zst'))) {
+  handle(chunk);
+}
+
+// Any async iterable is a valid source, not just a Readable.
+const gzipped = compressStream(rowsAsCsv(), { algorithm: 'gzip' });
+```
+
+Backpressure is honoured throughout. The only thing ever held back is the
+4-byte header the detector needs, which is why automatic decompression works
+even when chunks arrive one byte at a time.
 
 ### Files
 
@@ -107,6 +219,47 @@ Format-specific entry points, when you need to force the choice:
 | `extractTar(source, dest, options?)` | `extractZip(source, dest, options?)` |
 | `listTar(source, options?)` | `listZip(source)` |
 | `readTarEntries(source, options?)` | `ZipArchive.open(source)`, `readZipEntry(source, path)` |
+
+```ts
+import {
+  ZipArchive,
+  createArchive,
+  extractArchive,
+  listArchive,
+} from '@open-rlb/node-compressor';
+
+// Sources mix what is on disk with what only exists in memory. The extension
+// picks both the container and the compression: this is a zstd-compressed tar.
+const built = await createArchive(
+  'release.tar.zst',
+  ['dist', { path: 'BUILD.txt', data: `commit ${commit}\n` }],
+  {
+    filter: (entry) => !entry.path.endsWith('.map'),
+    compressionOptions: { preset: 'best' },
+  }
+);
+console.log(`${built.entries.length} entries, ${built.bytesWritten} bytes`);
+
+// Listing reads the archive without unpacking it.
+const entries = await listArchive('release.tar.zst');
+const total = entries.reduce((bytes, entry) => bytes + entry.size, 0);
+
+// Extraction never overwrites unless asked, and refuses any entry that would
+// escape the destination.
+const restored = await extractArchive('release.tar.zst', 'deploy');
+
+// A zip can be opened for random access instead, one entry at a time.
+const zip = await ZipArchive.open('release.zip');
+try {
+  const source = (await zip.read('dist/app.js')).toString('utf8');
+} finally {
+  await zip.close();
+}
+```
+
+`createArchive` and `extractArchive` both report what they did — entry list,
+bytes in and out, elapsed time — so a build script can log the numbers without
+stat-ing anything afterwards.
 
 ### Utilities
 
