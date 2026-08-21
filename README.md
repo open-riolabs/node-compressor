@@ -261,10 +261,10 @@ compression methods other than store, deflate and zstd.
 
 ## CLI
 
-The package ships a `compressor` command:
+The package ships a `node-compressor` command:
 
 ```bash
-npx compressor --help
+npx node-compressor --help
 ```
 
 | Command | Purpose |
@@ -275,23 +275,24 @@ npx compressor --help
 | `unpack <archive> [directory]` | Extract an archive |
 | `list <archive>` | List an archive |
 | `info <file...>` | Show format, algorithm and size |
+| `install-skill [directory]` | Copy the bundled Claude skill into a project |
 
 ```bash
-compressor compress -a zstd -p best dump.sql
+node-compressor compress -a zstd -p best dump.sql
 ```
 
 ```bash
-compressor pack release.tar.zst dist README.md --exclude '*.map'
+node-compressor pack release.tar.zst dist README.md --exclude '*.map'
 ```
 
 ```bash
-compressor unpack release.tar.zst ./target --strip 1
+node-compressor unpack release.tar.zst ./target --strip 1
 ```
 
 `-` reads from stdin and writes to stdout, so the commands compose:
 
 ```bash
-cat dump.sql | compressor compress -a brotli - > dump.sql.br
+cat dump.sql | node-compressor compress -a brotli - > dump.sql.br
 ```
 
 Every command accepts `--json` for machine-readable output and `--quiet` to silence
@@ -371,6 +372,58 @@ const data = await decompress(payload, { maxOutputSize: 10 * 1024 * 1024 });
   streamed without knowing CRC and sizes upfront. ZIP64 kicks in on its own past 4 GiB per
   entry, 4 GiB of offset, or 65,535 entries. POSIX permissions travel in the external
   attributes, with a UNIX "version made by".
+
+## Claude skill
+
+The package ships a Claude Code skill, so an agent working in a project that
+depends on this library knows the API without being handed it:
+
+| File | Contents |
+| --- | --- |
+| `SKILL.md` | When to reach for the library, which layer fits the task, and the behaviour that surprises people — nothing overwrites by default, brotli is undetectable, untrusted input needs `maxOutputSize`. |
+| `reference.md` | The full API surface: every function, every option, the error codes, the CLI grammar. |
+
+It lands in the consuming project at `.claude/skills/node-compressor/`.
+
+### Installing it
+
+The copy happens on `npm install` through a `postinstall` hook. **npm 11 and
+later block dependency install scripts by default**, so on those versions either
+approve the package once:
+
+```bash
+npm install-scripts approve @open-rlb/node-compressor
+```
+
+or add the policy to your `package.json`:
+
+```json
+{
+  "allowScripts": {
+    "@open-rlb/node-compressor": true
+  }
+}
+```
+
+Otherwise — or any time you want to refresh the skill after an upgrade — install
+it explicitly:
+
+```bash
+npx node-compressor install-skill
+```
+
+The command takes an optional target directory, replaces any previous copy, and
+accepts `--json`. Set `NODE_COMPRESSOR_SKIP_SKILL=1` to disable the automatic
+install. The hook never writes outside the project that triggered the install,
+never touches a directory without a `package.json`, and never fails an install.
+
+### Editing it
+
+The source of truth is [`skills/node-compressor/`](skills/node-compressor) in
+this repository. `npm run build` copies that folder into `dist/`, which is the
+root of the published package, so edits ship with the next release. Change those
+files rather than the copy under a consumer's `.claude/`, which is replaced on
+every install.
 
 ## Development
 

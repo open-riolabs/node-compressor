@@ -16,10 +16,11 @@
     }
   },
   "bin": {
-    "compressor": "./cli/index.js"
+    "node-compressor": "./cli/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "postinstall": "node scripts/install-skill.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test \"src/**/tests/*.spec.ts\"",
     "lint": "eslint \"src/**/*.ts\"",

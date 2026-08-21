@@ -37,6 +37,7 @@ import {
   type Palette,
 } from './format.ts';
 import { buildFilter } from './glob.ts';
+import { SKILL_NAME, installSkill } from './skill.ts';
 
 /** Streams the CLI writes to, replaceable in tests. */
 export interface CliIO {
@@ -63,10 +64,10 @@ class UsageError extends Error {
 
 const PRESETS: readonly Preset[] = ['fastest', 'fast', 'balanced', 'best'];
 
-const GENERAL_HELP = `compressor — compression and archiving on Node's built-in modules only
+const GENERAL_HELP = `node-compressor — compression and archiving on Node's built-in modules only
 
 Usage
-  compressor <command> [options] [arguments]
+  node-compressor <command> [options] [arguments]
 
 Commands
   compress     <file...>              compress the given files
@@ -75,6 +76,7 @@ Commands
   unpack       <archive> [directory]  extract an archive
   list         <archive>              list an archive without extracting it
   info         <file...>              show format, algorithm and size
+  install-skill [directory]           copy the Claude skill into a project
 
 Common options
   -h, --help                          general help, or help for one command
@@ -83,17 +85,17 @@ Common options
       --json                          machine-readable output
 
 Examples
-  compressor compress -a zstd -p best dump.sql
-  compressor decompress backup.tar.gz -o backup.tar
-  compressor pack release.tar.zst dist README.md --exclude '*.map'
-  compressor unpack release.tar.zst ./target --strip 1
-  cat dump.sql | compressor compress -a brotli - > dump.sql.br`;
+  node-compressor compress -a zstd -p best dump.sql
+  node-compressor decompress backup.tar.gz -o backup.tar
+  node-compressor pack release.tar.zst dist README.md --exclude '*.map'
+  node-compressor unpack release.tar.zst ./target --strip 1
+  cat dump.sql | node-compressor compress -a brotli - > dump.sql.br`;
 
 const COMMAND_HELP: Record<string, string> = {
   compress: `Compress one or more files.
 
 Usage
-  compressor compress [options] <file...>
+  node-compressor compress [options] <file...>
 
 Options
   -a, --algorithm <name>   gzip | deflate | deflate-raw | brotli | zstd (default: gzip)
@@ -112,7 +114,7 @@ extension (dump.sql -> dump.sql.zst).`,
   decompress: `Decompress one or more files.
 
 Usage
-  compressor decompress [options] <file...>
+  node-compressor decompress [options] <file...>
 
 Options
   -a, --algorithm <name>   force the algorithm instead of detecting it
@@ -129,7 +131,7 @@ unless the file extension gives it away (.br).`,
   pack: `Create a tar or zip archive.
 
 Usage
-  compressor pack [options] <archive> <sources...>
+  node-compressor pack [options] <archive> <sources...>
 
 Options
       --format <name>      tar | zip (default: from the extension)
@@ -151,7 +153,7 @@ Format and compression are read from the name: .zip, .tar, .tar.gz,
   unpack: `Extract a tar or zip archive.
 
 Usage
-  compressor unpack [options] <archive> [directory]
+  node-compressor unpack [options] <archive> [directory]
 
 Options
       --strip <number>     drop the first N path components
@@ -168,7 +170,7 @@ Absolute paths and paths containing ".." are always rejected.`,
   list: `List the contents of an archive.
 
 Usage
-  compressor list [options] <archive>
+  node-compressor list [options] <archive>
 
 Options
   -l, --long               show permissions and modification time
@@ -177,10 +179,24 @@ Options
   info: `Show format, algorithm and size of one or more files.
 
 Usage
-  compressor info [options] <file...>
+  node-compressor info [options] <file...>
 
 Options
       --json               output as JSON`,
+
+  'install-skill': `Copy the bundled Claude skill into a project.
+
+Usage
+  node-compressor install-skill [options] [directory]
+
+Options
+      --json               report the installed path as JSON
+
+The skill lands in <directory>/.claude/skills/node-compressor, replacing a
+previous copy. Without a directory the current one is used.
+
+npm runs this automatically on install, unless the package manager blocks
+dependency install scripts (npm 11+ does by default).`,
 };
 
 /**
@@ -753,6 +769,34 @@ async function commandInfo(
   return 0;
 }
 
+async function commandInstallSkill(
+  argv: string[],
+  context: CommandContext
+): Promise<number> {
+  const { positionals } = parse(argv, 'install-skill', {});
+  if (positionals.length > 1) {
+    throw new UsageError(
+      'install-skill takes a single directory',
+      'install-skill'
+    );
+  }
+
+  const destination = positionals[0] ?? process.cwd();
+  const target = await installSkill(destination);
+
+  if (context.json) {
+    emitJson(context.io, { skill: SKILL_NAME, destination: target });
+    return 0;
+  }
+  if (!context.quiet) {
+    line(
+      context.io,
+      `Claude skill installed in ${context.palette.bold(target)}`
+    );
+  }
+  return 0;
+}
+
 type OptionConfig = NonNullable<ParseArgsConfig['options']>;
 
 const COMMON_OPTIONS: OptionConfig = {
@@ -792,6 +836,7 @@ const COMMANDS: Record<
   unpack: commandUnpack,
   list: commandList,
   info: commandInfo,
+  'install-skill': commandInstallSkill,
 };
 
 const ALIASES: Record<string, string> = {
